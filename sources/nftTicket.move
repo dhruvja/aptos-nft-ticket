@@ -111,11 +111,12 @@ module NftTicket::Ticket {
         };
         assert!(i != ticket_count, ETICKET_NOT_FOUND);
 
-        let ticket = vector::borrow<Ticket>(&venue_info.tickets, i);
-        assert!(ticket.available >= quantity, ETICKETS_NOT_AVAILABLE);
+        let ticket = vector::borrow_mut<Ticket>(&mut venue_info.tickets, i);
+        assert!(ticket.available >= quantity, ETICKETS_NOT_AVAILABLE); 
 
         let total_price = ticket.price * quantity;
         coin::transfer<CoinType>(buyer, venue_info.owner, total_price);
+        ticket.available = ticket.available - quantity;
 
         let venue_resource_signer = account::create_signer_with_capability(&venue_info.resource_signer_cap);
 
