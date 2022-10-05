@@ -23,15 +23,16 @@ module NftTicket::Ticket {
         description: vector<u8>, 
         max_quantity: u64,
         price: u64,
-        available: u64
-        // token_data: token::TokenDataId
+        available: u64,
+        token_data: token::TokenDataId
     }
 
     struct Venue<phantom CoinType> has key {
         name: vector<u8>,
         description: vector<u8>,
         tickets: vector<Ticket>,
-        owner: address
+        owner: address,
+        resource_signer_cap: account::SignerCapability
     }
 
     public entry fun create_venue<CoinType>(venue_owner: &signer, name: vector<u8>, description: vector<u8>, uri: vector<u8>) {
@@ -39,8 +40,8 @@ module NftTicket::Ticket {
         let venue_owner_addr = signer::address_of(venue_owner);
 
         // creating a resource account which would create collection and mint tokens
-        let (resource, _resource_signer_cap) = account::create_resource_account(venue_owner, name);
-        move_to<Venue<CoinType>>(&resource, Venue {name, description, tickets, owner: venue_owner_addr});
+        let (resource, resource_signer_cap) = account::create_resource_account(venue_owner, name);
+        move_to<Venue<CoinType>>(&resource, Venue {name, description, tickets, owner: venue_owner_addr,resource_signer_cap});
 
         // create a collection with the venue name and resource account as the creator
         token::create_collection(
@@ -53,24 +54,45 @@ module NftTicket::Ticket {
         )
     }
 
-    public entry fun create_ticket<CoinType>(venue_owner: &signer, venue_resource: address, name: vector<u8>, description: vector<u8>, max_quantity: u64, price: u64) acquires Venue {
+    public entry fun create_ticket<CoinType>(venue_owner: &signer, venue_resource: address, name: vector<u8>, description: vector<u8>, uri: vector<u8>, max_quantity: u64, price: u64) acquires Venue {
         assert!(exists<Venue<CoinType>>(venue_resource), EVENUE_NOT_CREATED);
        
         let venue_owner_addr = signer::address_of(venue_owner); 
         let venue_info = borrow_global_mut<Venue<CoinType>>(venue_resource);
         assert!(venue_info.owner == venue_owner_addr, EINVALID_VENUE_OWNER);
 
+        let venue_resource_signer = account::create_signer_with_capability(&venue_info.resource_signer_cap);
+
+        // Creating a token data for this particular type of ticket which would be used to mint NFTs
+        let token_mutability = token::create_token_mutability_config(&vector<bool>[false, false, false, false, false]);
+
+        let token_data = token::create_tokendata(
+            &venue_resource_signer,
+            string::utf8(venue_info.name), // Collection Name
+            string::utf8(name), // Token Name
+            string::utf8(description), // Token description
+            max_quantity,
+            string::utf8(uri), 
+            venue_info.owner, // royalty payee address
+            100,
+            5,
+            token_mutability,
+            vector<string::String>[],
+            vector<vector<u8>>[],
+            vector<string::String>[]
+        );
+
         let ticket = Ticket {
             name,
             description,
             max_quantity,
             price,
-            available: max_quantity // At the point of creation, max quantity of tickets would be equal to available tickets
+            available: max_quantity, // At the point of creation, max quantity of tickets would be equal to available tickets
+            token_data
         };
 
         vector::push_back(&mut venue_info.tickets, ticket);
 
-        // Creating a token data for this particular type of ticket which would be used to mint NFTs
     }
 
     public entry fun purchase_ticket<CoinType>(buyer: &signer, venue_resource: address, name: vector<u8>, quantity: u64) acquires Venue {
@@ -95,7 +117,15 @@ module NftTicket::Ticket {
         let total_price = ticket.price * quantity;
         coin::transfer<CoinType>(buyer, venue_info.owner, total_price);
 
+        let venue_resource_signer = account::create_signer_with_capability(&venue_info.resource_signer_cap);
+
+        let buyer_addr = signer::address_of(buyer);
+
+        // the buyer should opt in direct transfer for the NFT to be minted
+        token::opt_in_direct_transfer(buyer, true);
+
         // Mint the NFT to the buyer account
+        token::mint_token_to(&venue_resource_signer, buyer_addr, ticket.token_data, quantity);
     }
 
     #[test_only]
@@ -141,9 +171,10 @@ module NftTicket::Ticket {
 
         let ticket_name = b"Front row";
         let ticket_description = b"You can see a lot of people";
+        let ticket_uri = b"https://dummyticket.com";
         let ticket_price = 100;
         let max_tickets = 50; 
-        create_ticket<FakeCoin>(&venue_owner, venue_resource, ticket_name, ticket_description, max_tickets ,ticket_price);
+        create_ticket<FakeCoin>(&venue_owner, venue_resource, ticket_name, ticket_description, ticket_uri, max_tickets ,ticket_price);
 
         let venue_info = borrow_global_mut<Venue<FakeCoin>>(venue_resource);
         assert!(vector::length(&venue_info.tickets) == 1, EINVALID_VECTOR_LENGTH);
