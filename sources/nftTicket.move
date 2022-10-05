@@ -6,11 +6,14 @@ module NftTicket::Ticket {
     use aptos_framework::account;
     use aptos_framework::aptos_account;
     use aptos_framework::managed_coin;
-    // use aptos_framework::coin;
+    use aptos_framework::coin;
 
     const EVENUE_NOT_CREATED: u64 = 0;
     const EINVALID_VENUE_OWNER: u64 = 1;
     const EINVALID_VECTOR_LENGTH: u64 = 2;
+    const ETICKET_NOT_FOUND: u64 = 3;
+    const ETICKETS_NOT_AVAILABLE: u64 = 4;
+    const EINVALID_BALANCE: u64 = 5;
 
     struct Ticket has store {
         name: vector<u8>,
@@ -58,6 +61,31 @@ module NftTicket::Ticket {
         // Creating a token data for this particular type of ticket which would be used to mint NFTs
     }
 
+    public entry fun purchase_ticket<CoinType>(buyer: &signer, venue_resource: address, name: vector<u8>, quantity: u64) acquires Venue {
+        assert!(exists<Venue<CoinType>>(venue_resource), EVENUE_NOT_CREATED);
+
+        let venue_info = borrow_global_mut<Venue<CoinType>>(venue_resource);
+        let ticket_count = vector::length(&venue_info.tickets);
+
+        let i = 0;
+        while (i < ticket_count) {
+            let current = vector::borrow<Ticket>(&venue_info.tickets, i);
+            if (current.name == name) {
+                break
+            };
+            i = i +1;
+        };
+        assert!(i != ticket_count, ETICKET_NOT_FOUND);
+
+        let ticket = vector::borrow<Ticket>(&venue_info.tickets, i);
+        assert!(ticket.available >= quantity, ETICKETS_NOT_AVAILABLE);
+
+        let total_price = ticket.price * quantity;
+        coin::transfer<CoinType>(buyer, venue_info.owner, total_price);
+
+        // Mint the NFT to the buyer account
+    }
+
     #[test_only]
     public fun get_resource_account(source: address, seed: vector<u8>)  : address {
         use std::hash;
@@ -79,15 +107,19 @@ module NftTicket::Ticket {
         managed_coin::register<FakeCoin>(user);
         managed_coin::mint<FakeCoin>(admin, user_addr, mint_amount); 
     }
+
     
     #[test(venue_owner = @0x4, buyer = @0x5, module_owner = @NftTicket)]
     public fun can_create_venue(venue_owner: signer, buyer: signer, module_owner: signer) acquires Venue {
         let venue_name = b"Eminem Concert";
         let venue_description = b"This concert would be lit";
         let venue_owner_addr = signer::address_of(&venue_owner);
+        let buyer_addr = signer::address_of(&buyer);
 
         let initial_mint_amount: u64 = 10000;
         initialize_coin_and_mint(&module_owner, &buyer, initial_mint_amount);
+        aptos_account::create_account(venue_owner_addr);
+        managed_coin::register<FakeCoin>(&venue_owner);
 
         create_venue<FakeCoin>(&venue_owner, venue_name, venue_description);
         let venue_resource = get_resource_account(venue_owner_addr, venue_name);
@@ -102,6 +134,10 @@ module NftTicket::Ticket {
 
         let venue_info = borrow_global_mut<Venue<FakeCoin>>(venue_resource);
         assert!(vector::length(&venue_info.tickets) == 1, EINVALID_VECTOR_LENGTH);
+
+        purchase_ticket<FakeCoin>(&buyer, venue_resource, ticket_name, 1);
+        assert!(coin::balance<FakeCoin>(buyer_addr) == (initial_mint_amount - ticket_price), EINVALID_BALANCE);
+        assert!(coin::balance<FakeCoin>(venue_owner_addr) == (ticket_price), EINVALID_BALANCE);
         
     }
 
